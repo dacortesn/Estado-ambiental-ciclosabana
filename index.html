@@ -48,10 +48,22 @@
                   border: 1px solid var(--color-border-line); background: var(--color-panel); color: var(--color-fg-muted); }
   .sitio-fuente.vivo { border-color: color-mix(in srgb, var(--color-ok) 45%, var(--color-border-line)); }
   .sitio-fuente.corte { border-color: color-mix(in srgb, var(--color-warn) 60%, var(--color-border-line)); color: var(--color-fg); }
+  /* Mapa con fondo de calles o satélite (Leaflet); la casilla de predios del tablero la reemplaza el control de capas. */
+  #capas-mapa { display: none !important; }
+  .ea-leaflet { height: clamp(440px, 62vw, 680px); width: 100%; }
+  .ea-mapbox .leaflet-container { font: 12px var(--font-anthropic-sans); background: var(--color-bg); }
+  .ea-mapbtn.ea-mapbtn-l { position: static; box-shadow: 0 1px 4px rgba(0,0,0,.25); }
+  .leaflet-popup-content { margin: 10px 12px; min-width: 220px; }
+  .ea-popup { font: 12px/1.4 var(--font-anthropic-sans); }
+  .ea-popup .t { font-weight: 600; margin-bottom: 4px; }
+  .ea-popup .r { display: flex; gap: 10px; justify-content: space-between; } .ea-popup .r span:first-child { color: #5b655f; white-space: nowrap; } .ea-popup .r span:last-child { text-align: right; }
+  .leaflet-control-layers { font: 12px var(--font-anthropic-sans); }
   .dash-select { font: inherit; font-size: var(--cds-font-size-body); color: var(--color-fg); background-color: var(--color-panel);
                  border: 1px solid var(--color-border-line); border-radius: var(--cds-radius); padding: 6px 10px; min-width: 0; max-width: 100%; }
   .dash-select:focus-visible, .ea-search:focus-visible, .ea-mapbtn:focus-visible { outline: 2px solid #2f6fd6; outline-offset: 1px; }
 </style>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.8.5/d3.min.js"></script>
 <script>
 // Lee las pestañas T5..T10 de la hoja de permisos ambientales (CSV exportado por Google) y arma una fila por permiso.
@@ -317,7 +329,7 @@ window.dash = (() => {
 
   <section id="mapa-ambiental">
     <h2 class="ea-h2">Mapa de permisos sobre los frentes de obra</h2>
-    <p class="ea-note">El mapa muestra siempre todos los corredores. Cada permiso se ubica en el eje por su abscisa; los que cubren todo el corredor se pintan como una franja tenue. Los filtros de tramo y tipo resaltan sus permisos y atenúan el resto. Arrastre para mover, use la rueda o pellizque para acercar, y toque un permiso o un predio para ver su ficha. El tramo 10 y los permisos sin abscisa en la hoja aparecen solo en las tablas.</p>
+    <p class="ea-note">El mapa muestra siempre todos los corredores. Cada permiso se ubica en el eje por su abscisa; los que cubren todo el corredor se pintan como una franja tenue. Los filtros de tramo y tipo resaltan sus permisos y atenúan el resto. Arrastre para mover, use la rueda o pellizque para acercar, y toque un permiso, un frente o un predio para ver su ficha. Con el botón de capas, arriba a la derecha, cambie entre calles y satélite y muestre u oculte los predios IGAC. El tramo 10 y los permisos sin abscisa en la hoja aparecen solo en las tablas.</p>
     <div class="ea-legend">
       <span><i class="ea-sw-vencido"></i>Vencido</span><span><i class="ea-sw-vence_30"></i>≤ 30 días</span><span><i class="ea-sw-vence_90"></i>31 a 90 días</span><span><i class="ea-sw-vigente"></i>Vigente</span>
       <span><i class="ea-sw-sin_fecha"></i>Otorgado sin fecha</span><span><i class="ea-sw-en_tramite"></i>En trámite</span><span><i class="ea-sw-cerrado"></i>Ejecutado</span><span><i class="ea-sw-no_requiere"></i>No requiere</span>
@@ -794,6 +806,114 @@ dash.draw('barras-ejecucion', (el) => {
     .attr('data-source', 'permisos').attr('data-field', 'pct_ejecucion').attr('data-where', (d) => 'permiso_id=' + encodeURIComponent(d.p.permiso_id))
     .text((d) => String(d.p.pct_ejecucion).replace('.', ',') + ' %');
 });
+</script>
+<script>
+// Solo para el sitio público: reemplaza el mapa del tablero por uno de Leaflet con fondo de calles o satélite.
+// Usa los mismos datos y colores (EA.*) y respeta los filtros de tramo y tipo, que resaltan sin recortar el mapa.
+(() => {
+  const CORR = { 5: 'T5', 6: 'MOS', 7: 'MM', 8: 'T8', 9: 'T9', 10: 'LP' };
+  const css = getComputedStyle(document.documentElement);
+  const color = (v) => { const m = /var\((--[^)]+)\)/.exec(v || ''); return m ? (css.getPropertyValue(m[1]).trim() || '#888') : (v || '#888'); };
+  const colAlerta = (a) => {
+    const base = { vencido: '--color-bad', vence_90: '--color-warn', vigente: '--color-ok', en_tramite: null, sin_fecha: null, no_requiere: '--cds-chart-muted' }[a];
+    if (a === 'vence_30') return '#d5652a';
+    if (a === 'en_tramite') return '#2f6fd6';
+    if (a === 'sin_fecha') return '#8a63d2';
+    if (a === 'cerrado') return '#7fa88d';
+    return base ? css.getPropertyValue(base).trim() : '#999';
+  };
+  const colPredial = (e) => ({ 'EJECUTADO': css.getPropertyValue('--color-ok').trim(), 'LIBERADO EN EJECUCION': '#2f6fd6', 'ENTREGADO - EN REVISION': css.getPropertyValue('--color-warn').trim(), 'SIN LIBERAR': css.getPropertyValue('--color-bad').trim(), 'PREDIO ENTREGADO - NO VIABLE': '#9aa39d' })[e] || '#9aa39d';
+  const ficha = (titulo, filas) => {
+    const d = document.createElement('div'); d.className = 'ea-popup';
+    const t = document.createElement('div'); t.className = 't'; t.textContent = titulo; d.appendChild(t);
+    filas.forEach(([a, b]) => { const r = document.createElement('div'); r.className = 'r'; const x = document.createElement('span'); x.textContent = a; const y = document.createElement('span'); y.textContent = b ?? '—'; r.append(x, y); d.appendChild(r); });
+    return d;
+  };
+
+  dash.draw('mapa', (el) => {
+    const P = dash.data('permisos'), T = dash.data('tramos'), E = dash.data('ejes'), A = dash.data('alertas'), PR = dash.data('predios');
+    if ([P, T, E].some((d) => d.status !== 'ok') || !Array.isArray(A.data)) return;
+    const am = EA.alertaDe();
+    const corrSel = EA.tramo === 'ALL' ? null : CORR[EA.tramo];
+
+    if (!el._m) {
+      el.replaceChildren();
+      const div = document.createElement('div'); div.className = 'ea-leaflet'; el.appendChild(div);
+      const map = L.map(div, { preferCanvas: true });
+      const base = {
+        'Calles (OpenStreetMap)': L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 20, maxNativeZoom: 19, attribution: '© OpenStreetMap' }),
+        'Satélite (Esri)': L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 20, maxNativeZoom: 19, attribution: 'Imagen © Esri, Maxar, Earthstar Geographics' }),
+      };
+      base['Calles (OpenStreetMap)'].addTo(map);
+      const ejes = E.data.filter((e) => ['T5', 'MOS', 'MM', 'T8', 'T9', 'LP'].includes(e.eje_id))
+        .map((e) => ({ id: e.eje_id, pts: (typeof e.geom === 'string' ? JSON.parse(e.geom) : e.geom).map((c) => [+c[0], +c[1], +c[2]]).sort((a, b) => a[2] - b[2]) }));
+      const gEjes = L.layerGroup(ejes.map((x) => L.polyline(x.pts.map((p) => [p[1], p[0]]), { color: '#555', weight: 1.5, dashArray: '4 4', interactive: false }))).addTo(map);
+      const gFrentes = L.layerGroup().addTo(map);
+      const gPredios = L.layerGroup();
+      const gPermisos = L.layerGroup().addTo(map);
+      L.control.layers(base, { 'Permisos ambientales': gPermisos, 'Frentes de obra': gFrentes, 'Ejes del proyecto': gEjes, 'Predios IGAC (estado predial)': gPredios }, { collapsed: window.innerWidth < 700 }).addTo(map);
+      L.control.scale({ imperial: false }).addTo(map);
+      const limites = L.latLngBounds(ejes.flatMap((x) => x.pts.map((p) => [p[1], p[0]])));
+      const Vista = L.Control.extend({ onAdd: () => { const b = L.DomUtil.create('button', 'ea-mapbtn ea-mapbtn-l'); b.type = 'button'; b.textContent = 'Vista completa'; L.DomEvent.on(b, 'click', (ev) => { L.DomEvent.stop(ev); map.fitBounds(limites, { padding: [16, 16] }); }); return b; } });
+      new Vista({ position: 'topleft' }).addTo(map);
+      map.fitBounds(limites, { padding: [16, 16] });
+      el._m = { map, ejes, gFrentes, gPredios, gPermisos };
+      new ResizeObserver(() => map.invalidateSize()).observe(div);
+    }
+    const { map, ejes, gFrentes, gPredios, gPermisos } = el._m;
+    const ejePor = new Map(ejes.map((x) => [x.id, x.pts]));
+    const punto = (pts, s) => {
+      if (s <= pts[0][2]) return pts[0]; if (s >= pts[pts.length - 1][2]) return pts[pts.length - 1];
+      const i = d3.bisector((p) => p[2]).left(pts, s); const a = pts[i - 1], b = pts[i]; const t = (s - a[2]) / ((b[2] - a[2]) || 1);
+      return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, s];
+    };
+    const tramo = (pts, a, b) => { const fin = Math.min(b, pts[pts.length - 1][2]); const ini = Math.max(a, pts[0][2]); if (fin < ini) return null; return [punto(pts, ini), ...pts.filter((p) => p[2] > ini && p[2] < fin), punto(pts, fin)].map((p) => [p[1], p[0]]); };
+
+    // Frentes de obra
+    gFrentes.clearLayers();
+    T.data.filter((t) => t.geom && ['T5', 'MOS', 'MM', 'T8', 'T9'].includes(t.corredor_id)).forEach((t) => {
+      const g = typeof t.geom === 'string' ? JSON.parse(t.geom) : t.geom;
+      L.polyline(g.map((c) => [c[1], c[0]]), { color: '#9aa39d', weight: 7, opacity: !corrSel || t.corredor_id === corrSel ? 0.55 : 0.25, lineCap: 'round' })
+        .bindPopup(() => ficha(t.corredor + ' · ' + t.tramo, [['Estado predial', EA.predial[t.estado] || t.estado], ['RT', t.rt || '—'], ['Sector', t.nombre || '—'], ['Longitud', t.longitud_m != null ? Math.round(t.longitud_m) + ' m' : '—']]))
+        .addTo(gFrentes);
+    });
+
+    // Predios IGAC
+    gPredios.clearLayers();
+    if (PR.status === 'ok') {
+      PR.data.filter((p) => p.geom).forEach((p) => {
+        const on = !corrSel || p.corredor_id === corrSel; const c = colPredial(p.estado);
+        L.geoJSON({ type: 'Feature', geometry: { type: p.geom_tipo, coordinates: typeof p.geom === 'string' ? JSON.parse(p.geom) : p.geom } },
+          { style: { color: c, weight: 1, opacity: on ? 0.9 : 0.35, fillColor: c, fillOpacity: on ? 0.3 : 0.08 } })
+          .bindPopup(() => ficha(p.npn, [['Estado del tramo', EA.predial[p.estado] || p.estado], ['Corredor', p.corredor], ['Abscisa', p.abscisa], ['RT', p.rt || '—'], ['Municipio', p.municipio], ['Destinación', (p.destinacion || '').replace(/_/g, ' ')], ['Área', p.area_m2 != null ? Math.round(p.area_m2).toLocaleString('es-CO') + ' m²' : '—']]))
+          .addTo(gPredios);
+      });
+    }
+
+    // Permisos
+    gPermisos.clearLayers();
+    const orden = (a) => EA.alertas.indexOf(a);
+    const items = P.data.filter((p) => p.abs_ini != null && ejePor.has(p.corredor_id)).map((p) => {
+      const pts = ejePor.get(p.corredor_id); const ini = +p.abs_ini; const fin = p.abs_fin != null ? +p.abs_fin : pts[pts.length - 1][2];
+      const linea = tramo(pts, ini, Math.max(fin, ini)); if (!linea) return null;
+      const mid = punto(pts, Math.min(Math.max((ini + fin) / 2, pts[0][2]), pts[pts.length - 1][2]));
+      return { p, a: am.get(p.permiso_id) || {}, on: EA.pasa(p), ancho: fin - ini > 2500, linea, mid: [mid[1], mid[0]] };
+    }).filter(Boolean).sort((x, y) => (x.on - y.on) || (orden(y.a.alerta) - orden(x.a.alerta)));
+    const popup = (d) => () => ficha(d.p.detalle || d.p.tipo, [['Tramo', 'T' + d.p.tramo], ['Tipo', d.p.tipo], ['Ubicación', d.p.ubicacion || '—'], ['Estado del trámite', d.p.estado_tramite], ['Alerta', EA.etiqueta[d.a.alerta]],
+      ['Vence', d.p.fecha_vencimiento ? EA.fecha(d.p.fecha_vencimiento) + (d.a.dias != null ? ' (' + d.a.dias + ' d)' : '') : '—'],
+      ['Ejecución', (d.p.estado_ejecucion || '—') + (d.p.pct_ejecucion != null ? ' · ' + String(d.p.pct_ejecucion).replace('.', ',') + ' %' : '')],
+      ['Frente (predial)', d.a.frente_estado === 'TODO EL CORREDOR' ? 'Todo el corredor' : (EA.predial[d.a.frente_estado] || '—')]]);
+    items.filter((d) => d.ancho).forEach((d) => L.polyline(d.linea, { color: colAlerta(d.a.alerta), weight: 16, opacity: d.on ? 0.22 : 0.06, lineCap: 'round' }).bindPopup(popup(d)).addTo(gPermisos));
+    items.filter((d) => !d.ancho).forEach((d) => {
+      const c = colAlerta(d.a.alerta);
+      L.polyline(d.linea, { color: c, weight: 5, opacity: d.on ? 1 : 0.2, lineCap: 'round' }).bindPopup(popup(d)).addTo(gPermisos);
+      L.circleMarker(d.mid, { radius: 6, color: '#fff', weight: 1.5, opacity: d.on ? 1 : 0.3, fillColor: c, fillOpacity: d.on ? 1 : 0.2 })
+        .bindTooltip((d.p.rt || d.p.ubicacion || d.p.tipo).split(' · ')[0] + ' — ' + EA.etiqueta[d.a.alerta], { direction: 'top' })
+        .bindPopup(popup(d)).addTo(gPermisos);
+    });
+  });
+})();
+
 </script>
 <footer class="sitio-pie">Permisos: hoja «Permisos ambientales otorgados para el CTO 1246/2023», leída cada vez que se abre la página (respaldo: corte del 11 de noviembre de 2026). Frentes de obra: hoja FRENTES DE OBRA 2026. Ejes: PROYECTO CICLORUTAS.kmz.</footer>
 </main>
