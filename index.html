@@ -88,11 +88,28 @@ window.LectorHoja = (() => {
   const limpia = (s) => String(s ?? '').replace(/\r/g, '').replace(/[ \t]+/g, ' ').replace(/ *\n */g, '\n').trim();
   const unaLinea = (s) => limpia(s).replace(/\s*\n\s*/g, ' · ');
   const numero = (s) => { s = limpia(s); if (!/^-?\d+([.,]\d+)?%?$/.test(s)) return null; return parseFloat(s.replace(',', '.')); };
-  const fecha = (s) => {
+  // Las fechas que son fecha en la hoja se exportan como M/D/AAAA sin ceros ("4/11/2026"). Las que alguien escribió como texto
+  // suelen venir como DD/MM/AAAA con ceros ("11/04/2026"). Se dan las dos lecturas posibles y se elige la que cuadra.
+  const iso = (y, m, d) => (m >= 1 && m <= 12 && d >= 1 && d <= 31 ? `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}` : null);
+  const lecturas = (s) => {
     s = limpia(s); let m;
-    if ((m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/))) return s;
-    if ((m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/))) return `${m[3]}-${m[1].padStart(2, '0')}-${m[2].padStart(2, '0')}`; // la hoja exporta M/D/AAAA
-    return null;
+    if ((m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/))) return { md: s, dm: null, texto: false };
+    if (!(m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/))) return null;
+    return { md: iso(+m[3], +m[1], +m[2]), dm: iso(+m[3], +m[2], +m[1]), texto: m[1].length === 2 && m[2].length === 2 && (m[1][0] === '0' || m[2][0] === '0') };
+  };
+  const preferida = (l) => (!l ? null : (l.texto && l.dm) ? l.dm : (l.md || l.dm));
+  const sumarMeses = (f, n) => { const d = new Date(f + 'T00:00:00Z'); d.setUTCMonth(d.getUTCMonth() + n); return d; };
+  const fechas = (sE, sV, vig) => {
+    const e = lecturas(sE), v = lecturas(sV);
+    let fe = preferida(e), fv = preferida(v);
+    if (fe && fv && vig != null) {
+      const err = (a, b) => Math.abs(sumarMeses(a, vig) - new Date(b + 'T00:00:00Z')) / 864e5;
+      let mejor = err(fe, fv);
+      for (const a of [e.md, e.dm].filter(Boolean)) for (const b of [v.md, v.dm].filter(Boolean)) {
+        const x = err(a, b); if (x + 15 < mejor) { mejor = x; fe = a; fv = b; }
+      }
+    }
+    return [fe, fv];
   };
   const porcentaje = (s) => { const t = limpia(s); const n = numero(t); if (n == null) return null; return t.endsWith('%') ? n : n <= 1 ? Math.round(n * 1000) / 10 : n; };
   const abscisas = (txt) => {
@@ -137,6 +154,7 @@ window.LectorHoja = (() => {
       const extra = r.slice(cO + 1).map(limpia).filter(Boolean);
       const [ai, af] = abscisas(ubic + ' ' + (ubic ? '' : det));
       const vig = g(cV), vigN = numero(vig), arb = g(cA), arbN = numero(arb);
+      const [fEm, fVe] = fechas(g(cFe), g(cFv), vigN);
       const ee = g(cEe);
       let ult = '', ultF = null;
       for (const ln of obs.split('\n')) {
@@ -147,7 +165,7 @@ window.LectorHoja = (() => {
         permiso_id: `T${n}-${String(k).padStart(2, '0')}`, tramo: n, tramo_nombre: NOMBRE[n], corredor_id: CORR[n],
         tipo: tipo(det, g(1), g(2)), ubicacion: unaLinea(ubic), rt: [...ubic.matchAll(/T\d{1,2}-[0-9]+[A-Za-zª]?(?:-\d+)?/g)].map((m) => m[0]).join(', '),
         abs_ini: ai, abs_fin: af, detalle: unaLinea(det), estado_tramite: est || 'Sin estado',
-        fecha_emision: fecha(g(cFe)), vigencia_meses: vigN, vigencia_txt: vigN == null ? vig : '', fecha_vencimiento: fecha(g(cFv)),
+        fecha_emision: fEm, vigencia_meses: vigN, vigencia_txt: vigN == null ? vig : '', fecha_vencimiento: fVe,
         arboles: arbN, arboles_txt: arbN == null ? arb : '', estado_ejecucion: ee && ee !== 'N/A' ? ee : '', pct_ejecucion: porcentaje(g(cPe)),
         observaciones: obs, ultima_novedad: ult, ultima_novedad_fecha: ultF, pendientes: extra.join(' · '),
       });
