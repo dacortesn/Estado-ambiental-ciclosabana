@@ -58,6 +58,19 @@
   .ea-popup .t { font-weight: 600; margin-bottom: 4px; }
   .ea-popup .r { display: flex; gap: 10px; justify-content: space-between; } .ea-popup .r span:first-child { color: #5b655f; white-space: nowrap; } .ea-popup .r span:last-child { text-align: right; }
   .leaflet-control-layers { font: 12px var(--font-anthropic-sans); }
+  .abs-lbl { font: 600 10px/1 ui-monospace, "IBM Plex Mono", Consolas, monospace; color: #1c2421; white-space: nowrap; pointer-events: none; text-shadow: 0 0 2px #fff, 0 0 2px #fff, 0 0 3px #fff, 0 0 4px #fff; }
+  .abs-lbl.km { font-size: 11.5px; color: #8a3b12; }
+  .loc-btn { width: 34px; height: 34px; display: grid; place-items: center; background: #fff; border: 0; cursor: pointer; color: #333; }
+  .loc-btn.on { color: #fff; background: #7a3db8; }
+  .loc-btn svg { width: 18px; height: 18px; }
+  @keyframes pulso { from { transform: scale(.6); opacity: .9 } to { transform: scale(2.2); opacity: 0 } }
+  .yo-marca { position: relative; }
+  .yo-marca i { position: absolute; inset: 0; border-radius: 50%; background: #7a3db8; border: 2px solid #fff; box-shadow: 0 1px 4px rgba(0,0,0,.4); }
+  .yo-marca b { position: absolute; inset: 0; border-radius: 50%; background: #7a3db8; }
+  @media (prefers-reduced-motion: no-preference) { .yo-marca b { animation: pulso 1.8s ease-out infinite; } }
+  .ea-yo-info { font-size: 13px; padding: 10px 14px; border-top: 1px solid var(--color-border-line); background: color-mix(in srgb, #7a3db8 8%, var(--color-panel)); display: grid; gap: 4px; }
+  .ea-yo-info .t { font-weight: 600; }
+  .ea-yo-info ul { margin: 2px 0 0; padding-left: 18px; }
   .dash-select { font: inherit; font-size: var(--cds-font-size-body); color: var(--color-fg); background-color: var(--color-panel);
                  border: 1px solid var(--color-border-line); border-radius: var(--cds-radius); padding: 6px 10px; min-width: 0; max-width: 100%; }
   .dash-select:focus-visible, .ea-search:focus-visible, .ea-mapbtn:focus-visible { outline: 2px solid #2f6fd6; outline-offset: 1px; }
@@ -431,7 +444,7 @@ window.dash = (() => {
 
   <section id="mapa-ambiental">
     <h2 class="ea-h2">Mapa de permisos sobre los frentes de obra</h2>
-    <p class="ea-note">El mapa muestra siempre todos los corredores. Cada permiso se ubica en el eje por su abscisa; los que cubren todo el corredor se pintan como una franja tenue. Los filtros de tramo y tipo resaltan sus permisos y atenúan el resto. Arrastre para mover, use la rueda o pellizque para acercar, y toque un permiso, un frente o un predio para ver su ficha. Con el botón de capas, arriba a la derecha, cambie entre calles y satélite y muestre u oculte los predios IGAC. El tramo 10 y los permisos sin abscisa en la hoja aparecen solo en las tablas.</p>
+    <p class="ea-note">El mapa muestra siempre todos los corredores. Cada permiso se ubica en el eje por su abscisa; los que cubren todo el corredor se pintan como una franja tenue. Los filtros de tramo y tipo resaltan sus permisos y atenúan el resto. Arrastre para mover, use la rueda o pellizque para acercar, y toque un permiso, un frente o un predio para ver su ficha. Con el botón de capas, arriba a la derecha, cambie entre calles y satélite y muestre u oculte los predios IGAC y el abscisado (visible al acercar). El botón de ubicación, debajo del zoom, lo sitúa en el mapa y le dice la abscisa, el frente de obra y los permisos cercanos; la ubicación se calcula en su dispositivo y no se envía a ningún servidor. El tramo 10 y los permisos sin abscisa en la hoja aparecen solo en las tablas.</p>
     <div class="ea-legend">
       <span><i class="ea-sw-vencido"></i>Vencido</span><span><i class="ea-sw-vence_30"></i>≤ 30 días</span><span><i class="ea-sw-vence_90"></i>31 a 90 días</span><span><i class="ea-sw-vigente"></i>Vigente</span>
       <span><i class="ea-sw-sin_fecha"></i>Otorgado sin fecha</span><span><i class="ea-sw-en_tramite"></i>En trámite</span><span><i class="ea-sw-cerrado"></i>Ejecutado</span><span><i class="ea-sw-no_requiere"></i>No requiere</span>
@@ -953,12 +966,87 @@ dash.draw('barras-ejecucion', (el) => {
       const gFrentes = L.layerGroup().addTo(map);
       const gPredios = L.layerGroup();
       const gPermisos = L.layerGroup().addTo(map);
-      L.control.layers(base, { 'Permisos ambientales': gPermisos, 'Frentes de obra': gFrentes, 'Ejes del proyecto': gEjes, 'Predios IGAC (estado predial)': gPredios }, { collapsed: window.innerWidth < 700 }).addTo(map);
+      const gAbs = L.layerGroup().addTo(map), gYo = L.layerGroup().addTo(map);
+      L.control.layers(base, { 'Permisos ambientales': gPermisos, 'Frentes de obra': gFrentes, 'Ejes del proyecto': gEjes, 'Abscisado del proyecto (KML)': gAbs, 'Predios IGAC (estado predial)': gPredios }, { collapsed: window.innerWidth < 700 }).addTo(map);
+      // Abscisado: cada 1 km lejos, 500 m a media distancia, 100 m de cerca (como en los mapas prediales)
+      const abscisado = () => {
+        gAbs.clearLayers();
+        if (!map.hasLayer(gAbs) || !map._loaded) return;
+        const z = map.getZoom(); if (z < 13) return;
+        const paso = z >= 16 ? 100 : z >= 15 ? 500 : 1000;
+        const caja = map.getBounds().pad(0.2);
+        ejes.forEach((x) => x.pts.forEach((p) => {
+          const v = p[2];
+          if (v == null || Math.abs(v / paso - Math.round(v / paso)) > 1e-6 || !caja.contains([p[1], p[0]])) return;
+          const km = Math.floor(v / 1000), m = Math.round(v - km * 1000), esKm = m === 0;
+          gAbs.addLayer(L.circleMarker([p[1], p[0]], { radius: esKm ? 4 : 2.5, color: '#1c2421', weight: 1.2, fillColor: '#fff', fillOpacity: 1, interactive: false }));
+          gAbs.addLayer(L.marker([p[1], p[0]], { icon: L.divIcon({ className: 'abs-lbl' + (esKm ? ' km' : ''), html: 'K' + km + '+' + String(m).padStart(3, '0'), iconSize: null, iconAnchor: [-7, 6] }), interactive: false, keyboard: false }));
+        }));
+      };
+      map.on('zoomend moveend overlayadd', abscisado);
+
+      // Mi ubicación: se calcula en el dispositivo; dice abscisa, frente de obra y permisos cercanos
+      const info = document.createElement('div'); info.className = 'ea-yo-info'; info.setAttribute('role', 'status'); info.hidden = true; el.appendChild(info);
+      const EJE_TRAMO = { T5: 5, MOS: 6, MM: 7, T8: 8, T9: 9, LP: 10 };
+      const kfmt = (v) => { const km = Math.floor(v / 1000); return 'K' + km + '+' + String(Math.round(v - km * 1000)).padStart(3, '0'); };
+      const fm = new Intl.NumberFormat('es-CO', { maximumFractionDigits: 0 });
+      let watchId = null, primer = true, marca = null, circulo = null;
+      const linea = (txt, cls) => { const d = document.createElement('div'); if (cls) d.className = cls; d.textContent = txt; return d; };
+      const mostrar = (...nodos) => { info.hidden = false; info.replaceChildren(...nodos); };
+      const detener = (b, conservar) => { if (watchId != null) navigator.geolocation.clearWatch(watchId); watchId = null; b.classList.remove('on'); gYo.clearLayers(); marca = circulo = null; if (!conservar) info.hidden = true; };
+      const enUbicacion = (pos) => {
+        const { latitude: lat, longitude: lon, accuracy } = pos.coords; const p = [lat, lon];
+        if (!marca) {
+          circulo = L.circle(p, { radius: accuracy, color: '#7a3db8', fillColor: '#7a3db8', weight: 1, fillOpacity: .08, interactive: false }).addTo(gYo);
+          marca = L.marker(p, { icon: L.divIcon({ className: 'yo-marca', html: '<b></b><i></i>', iconSize: [16, 16] }), keyboard: false, title: 'Mi ubicación' }).addTo(gYo);
+        } else { marca.setLatLng(p); circulo.setLatLng(p).setRadius(accuracy); }
+        if (primer) { map.setView(p, Math.max(map.getZoom(), 17)); primer = false; }
+        const K = Math.cos(lat * Math.PI / 180) * 111320, M = 110574;
+        let mejor = null;
+        ejes.forEach((x) => x.pts.forEach((v) => { const d = Math.hypot((v[0] - lon) * K, (v[1] - lat) * M); if (!mejor || d < mejor.d) mejor = { d, eje: x.id, v: v[2] }; }));
+        const prec = `precisión ±${fm.format(accuracy)} m`;
+        if (!mejor || mejor.d > 2000) { mostrar(linea(`Su ubicación · ${prec}. Está a más de 2 km de los ejes del proyecto.`)); return; }
+        const n = EJE_TRAMO[mejor.eje];
+        const frente = (dash.data('tramos').data || []).find((t) => t.corredor_id === mejor.eje && t.abscisa_inicial != null && t.abscisa_final != null && mejor.v >= +t.abscisa_inicial && mejor.v <= +t.abscisa_final);
+        const am = EA.alertaDe();
+        const cerca = (dash.data('permisos').data || []).filter((q) => q.corredor_id === mejor.eje && q.abs_ini != null && mejor.v >= +q.abs_ini - 200 && mejor.v <= (q.abs_fin != null ? +q.abs_fin : Infinity) + 200 && (q.abs_fin == null || +q.abs_fin - +q.abs_ini <= 2500));
+        const nodos = [linea(`Está a ${fm.format(mejor.d)} m del eje del tramo ${n} (${EA.nombres[n].replace(/^el tramo \d+ \(|\)$/g, '')}), cerca de la abscisa ${kfmt(mejor.v)} · ${prec}.`, 't'),
+          linea(frente ? `Frente de obra: ${EA.predial[frente.estado] || frente.estado} · ${frente.tramo}${frente.rt ? ' · RT ' + frente.rt : ''}` : 'Esa abscisa no tiene un frente registrado en la hoja de frentes de obra.')];
+        if (cerca.length) {
+          nodos.push(linea(`Permisos ambientales a 200 m o menos (${cerca.length}):`));
+          const ul = document.createElement('ul');
+          cerca.slice(0, 6).forEach((q) => { const a = am.get(q.permiso_id) || {}; const li = document.createElement('li'); li.textContent = `${(q.rt || q.ubicacion || q.tipo).split(' · ')[0]} · ${q.tipo} · ${q.estado_tramite} · ${EA.etiqueta[a.alerta] || '—'}${q.fecha_vencimiento ? ' (vence ' + EA.fecha(q.fecha_vencimiento) + ')' : ''}`; ul.appendChild(li); });
+          nodos.push(ul);
+        } else nodos.push(linea('No hay permisos ambientales registrados a 200 m o menos de esa abscisa.'));
+        mostrar(...nodos);
+      };
+      const Loc = L.Control.extend({
+        options: { position: 'topleft' },
+        onAdd() {
+          const div = L.DomUtil.create('div', 'leaflet-bar');
+          const b = L.DomUtil.create('button', 'loc-btn', div);
+          b.type = 'button'; b.title = 'Mostrar mi ubicación'; b.setAttribute('aria-label', 'Mostrar mi ubicación');
+          b.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>';
+          L.DomEvent.disableClickPropagation(div);
+          b.addEventListener('click', () => {
+            if (watchId != null) { detener(b); return; }
+            if (!('geolocation' in navigator)) { mostrar(linea('Este navegador no permite obtener la ubicación.')); return; }
+            b.classList.add('on'); primer = true; mostrar(linea('Buscando su ubicación…'));
+            watchId = navigator.geolocation.watchPosition(enUbicacion, (err) => {
+              mostrar(linea(err.code === 1 ? 'No se dio permiso para usar la ubicación. Actívelo en el navegador y vuelva a tocar el botón.' : err.code === 3 ? 'La ubicación tardó demasiado. Intente de nuevo al aire libre.' : 'No se pudo obtener la ubicación.'));
+              detener(b, true);
+            }, { enableHighAccuracy: true, maximumAge: 5000, timeout: 20000 });
+          });
+          return div;
+        },
+      });
+      map.addControl(new Loc());
       L.control.scale({ imperial: false }).addTo(map);
       const limites = L.latLngBounds(ejes.flatMap((x) => x.pts.map((p) => [p[1], p[0]])));
       const Vista = L.Control.extend({ onAdd: () => { const b = L.DomUtil.create('button', 'ea-mapbtn ea-mapbtn-l'); b.type = 'button'; b.textContent = 'Vista completa'; L.DomEvent.on(b, 'click', (ev) => { L.DomEvent.stop(ev); map.fitBounds(limites, { padding: [16, 16] }); }); return b; } });
       new Vista({ position: 'topleft' }).addTo(map);
       map.fitBounds(limites, { padding: [16, 16] });
+      abscisado();
       el._m = { map, ejes, gFrentes, gPredios, gPermisos };
       new ResizeObserver(() => map.invalidateSize()).observe(div);
     }
